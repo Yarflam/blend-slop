@@ -544,7 +544,7 @@ def call_anthropic(
         headers.update(extra_headers)
     body = {
         "model": model,
-        "max_tokens": 4096,
+        "max_tokens": 8192,
         "system": system_prompt,
         "messages": messages,
     }
@@ -565,7 +565,7 @@ def call_openai(api_key: str, model: str, system_prompt: str, messages: list[dic
     body = {
         "model": model,
         "messages": all_messages,
-        "max_tokens": 4096,
+        "max_tokens": 8192,
     }
     return _http_post(url, headers, body, _parse_openai_response)
 
@@ -597,6 +597,11 @@ def _http_post(url: str, headers: dict[str, str], body: dict[str, Any], parser: 
 
 
 def _parse_claude_response(data: dict[str, Any]) -> str:
+    if data.get("stop_reason") == "max_tokens":
+        raise RuntimeError(
+            "Model response was truncated (max_tokens reached). "
+            "Try a simpler request, or ask for the result in smaller parts."
+        )
     for block in data.get("content", []):
         if block.get("type") == "text":
             return block["text"]
@@ -606,6 +611,11 @@ def _parse_claude_response(data: dict[str, Any]) -> str:
 def _parse_openai_response(data: dict[str, Any]) -> str:
     choices = data.get("choices", [])
     if choices:
+        if choices[0].get("finish_reason") == "length":
+            raise RuntimeError(
+                "Model response was truncated (max_tokens reached). "
+                "Try a simpler request, or ask for the result in smaller parts."
+            )
         return choices[0].get("message", {}).get("content", "")
     return ""
 

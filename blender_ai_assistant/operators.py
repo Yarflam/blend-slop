@@ -344,6 +344,15 @@ def _check_result_queue() -> float | None:
         msg.content = data
         _log_write("assistant", data)
 
+        if not data.strip():
+            err_msg = state.messages.add()
+            err_msg.role = "system"
+            err_msg.content = "The model returned an empty response. Try rephrasing or switching model."
+            err_msg.is_error = True
+            state.is_busy = False
+            _redraw_views()
+            return None
+
         # Extract code blocks
         code_blocks = code_execution.extract_code_blocks(data)
         if code_blocks:
@@ -380,6 +389,10 @@ def _check_result_queue() -> float | None:
                 else:
                     state.is_busy = False
         else:
+            # No code in the response -- show the model's text so the user gets feedback
+            note = state.messages.add()
+            note.role = "system"
+            note.content = "AI replied without code:\n" + data.strip()
             state.is_busy = False
     else:
         msg = state.messages.add()
