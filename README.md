@@ -10,7 +10,9 @@ A chat panel inside Blender's 3D viewport that lets you control Blender through 
 
 **Features:**
 - Chat interface in the 3D viewport sidebar (N panel > AI Assistant tab)
-- Supports **Claude**, **OpenAI**, and **Ollama** (local models) as LLM providers
+- Supports **Claude**, **OpenAI**, **Kimi** (Moonshot), **DeepSeek**, and **Ollama** (local models) as LLM providers
+  - Kimi: `k3` (api.kimi.ai/coding), `kimi-for-coding` / `kimi-coding` (api.kimi.com/coding) -- Anthropic-compatible endpoint
+  - DeepSeek: `deepseek-v4-pro` (optional 1M-token context beta) and `deepseek-v4-flash` via api.deepseek.com/anthropic
 - Deep Blender 5.x API knowledge in the system prompt -- knows about renamed nodes, removed APIs, and common pitfalls
 - Understands natural language ("make it glossy", "add thickness", "three-point lighting") and maps to correct Blender operations
 - Sends current scene state to the LLM (objects, materials, modifiers, node trees, lights, cameras, enabled addons)
@@ -26,7 +28,7 @@ A chat panel inside Blender's 3D viewport that lets you control Blender through 
 
 **Requirements:**
 - Blender 5.0+
-- API key for Claude or OpenAI (or a running Ollama instance for local models)
+- API key for Claude, OpenAI, Kimi, or DeepSeek (or a running Ollama instance for local models)
 - Optional: Sketchfab API token for model downloads (get from [sketchfab.com/settings/password](https://sketchfab.com/settings/password))
 
 ### Installation

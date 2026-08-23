@@ -58,6 +58,10 @@ class AIASSIST_PT_main_panel(Panel):
                 row.prop(prefs, "claude_model", text="")
             elif prefs.provider == "OPENAI":
                 row.prop(prefs, "openai_model", text="")
+            elif prefs.provider == "KIMI":
+                row.prop(prefs, "kimi_model", text="")
+            elif prefs.provider == "DEEPSEEK":
+                row.prop(prefs, "deepseek_model", text="")
             elif prefs.provider == "OLLAMA":
                 row.prop(prefs, "ollama_model", text="")
 
@@ -65,6 +69,13 @@ class AIASSIST_PT_main_panel(Panel):
                 panel.prop(prefs, "claude_api_key", text="LLM Key")
             elif prefs.provider == "OPENAI":
                 panel.prop(prefs, "openai_api_key", text="LLM Key")
+            elif prefs.provider == "KIMI":
+                panel.prop(prefs, "kimi_api_key", text="LLM Key")
+                panel.prop(prefs, "kimi_base_url", text="URL")
+            elif prefs.provider == "DEEPSEEK":
+                panel.prop(prefs, "deepseek_api_key", text="LLM Key")
+                panel.prop(prefs, "deepseek_base_url", text="URL")
+                panel.prop(prefs, "deepseek_long_context")
             elif prefs.provider == "OLLAMA":
                 panel.prop(prefs, "ollama_url", text="URL")
 

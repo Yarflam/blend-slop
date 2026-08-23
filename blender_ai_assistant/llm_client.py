@@ -521,13 +521,27 @@ def build_messages(system_prompt: str, conversation_history: list[dict[str, str]
     return system_prompt, messages
 
 
-def call_claude(api_key: str, model: str, system_prompt: str, messages: list[dict[str, str]]) -> str:
-    url = "https://api.anthropic.com/v1/messages"
+ANTHROPIC_API_VERSION = "2023-06-01"
+ANTHROPIC_BASE_URL = "https://api.anthropic.com"
+
+
+def call_anthropic(
+    base_url: str,
+    api_key: str,
+    model: str,
+    system_prompt: str,
+    messages: list[dict[str, str]],
+    extra_headers: dict[str, str] | None = None,
+) -> str:
+    """Call any Anthropic-compatible /v1/messages endpoint (Anthropic, Kimi, DeepSeek)."""
+    url = f"{base_url.rstrip('/')}/v1/messages"
     headers = {
         "Content-Type": "application/json",
         "x-api-key": api_key,
-        "anthropic-version": "2023-06-01",
+        "anthropic-version": ANTHROPIC_API_VERSION,
     }
+    if extra_headers:
+        headers.update(extra_headers)
     body = {
         "model": model,
         "max_tokens": 4096,
@@ -535,6 +549,10 @@ def call_claude(api_key: str, model: str, system_prompt: str, messages: list[dic
         "messages": messages,
     }
     return _http_post(url, headers, body, _parse_claude_response)
+
+
+def call_claude(api_key: str, model: str, system_prompt: str, messages: list[dict[str, str]]) -> str:
+    return call_anthropic(ANTHROPIC_BASE_URL, api_key, model, system_prompt, messages)
 
 
 def call_openai(api_key: str, model: str, system_prompt: str, messages: list[dict[str, str]]) -> str:

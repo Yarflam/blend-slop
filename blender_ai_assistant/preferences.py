@@ -1,5 +1,5 @@
 import bpy
-from bpy.props import StringProperty, EnumProperty, IntProperty
+from bpy.props import StringProperty, EnumProperty, IntProperty, BoolProperty
 from bpy.types import AddonPreferences
 
 
@@ -17,6 +17,8 @@ class AIAssistantPreferences(AddonPreferences):
         items=[
             ("CLAUDE", "Claude (Anthropic)", "Use Anthropic Claude API"),
             ("OPENAI", "OpenAI", "Use OpenAI API (GPT-4o, etc.)"),
+            ("KIMI", "Kimi (Moonshot)", "Use Kimi coding API (Anthropic-compatible)"),
+            ("DEEPSEEK", "DeepSeek", "Use DeepSeek API (Anthropic-compatible)"),
             ("OLLAMA", "Ollama (Local)", "Use local Ollama instance"),
         ],
         default="CLAUDE",
@@ -53,6 +55,55 @@ class AIAssistantPreferences(AddonPreferences):
             ("gpt-4.1", "GPT-4.1", "Latest GPT-4 variant"),
         ],
         default="gpt-4o",
+    )
+
+    kimi_api_key: StringProperty(
+        name="Kimi API Key",
+        subtype="PASSWORD",
+        description="Kimi API key (starts with sk-kimi-)",
+    )
+
+    kimi_model: EnumProperty(
+        name="Kimi Model",
+        items=[
+            ("k3", "K3", "Kimi K3 (api.kimi.ai/coding)"),
+            ("kimi-for-coding", "Kimi for Coding", "Kimi for Coding (api.kimi.com/coding)"),
+            ("kimi-coding", "Kimi Coding", "Kimi Coding alias (api.kimi.com/coding)"),
+        ],
+        default="k3",
+    )
+
+    kimi_base_url: StringProperty(
+        name="Kimi Base URL",
+        default="https://api.kimi.ai/coding",
+        description="Kimi API base URL (use https://api.kimi.com/coding for kimi-for-coding)",
+    )
+
+    deepseek_api_key: StringProperty(
+        name="DeepSeek API Key",
+        subtype="PASSWORD",
+        description="DeepSeek API key (starts with sk-)",
+    )
+
+    deepseek_model: EnumProperty(
+        name="DeepSeek Model",
+        items=[
+            ("deepseek-v4-pro", "DeepSeek V4 Pro", "Most capable DeepSeek model"),
+            ("deepseek-v4-flash", "DeepSeek V4 Flash", "Fast and cheap DeepSeek model"),
+        ],
+        default="deepseek-v4-pro",
+    )
+
+    deepseek_base_url: StringProperty(
+        name="DeepSeek Base URL",
+        default="https://api.deepseek.com/anthropic",
+        description="DeepSeek Anthropic-compatible API base URL",
+    )
+
+    deepseek_long_context: BoolProperty(
+        name="1M Context (Pro)",
+        default=True,
+        description="Request the 1M-token context beta for deepseek-v4-pro (anthropic-beta header)",
     )
 
     ollama_url: StringProperty(
@@ -93,6 +144,15 @@ class AIAssistantPreferences(AddonPreferences):
         elif self.provider == "OPENAI":
             layout.prop(self, "openai_api_key")
             layout.prop(self, "openai_model")
+        elif self.provider == "KIMI":
+            layout.prop(self, "kimi_api_key")
+            layout.prop(self, "kimi_model")
+            layout.prop(self, "kimi_base_url")
+        elif self.provider == "DEEPSEEK":
+            layout.prop(self, "deepseek_api_key")
+            layout.prop(self, "deepseek_model")
+            layout.prop(self, "deepseek_base_url")
+            layout.prop(self, "deepseek_long_context")
         elif self.provider == "OLLAMA":
             layout.prop(self, "ollama_url")
             layout.prop(self, "ollama_model")

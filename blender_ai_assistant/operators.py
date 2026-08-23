@@ -40,18 +40,41 @@ def _get_error_log() -> bpy.types.Text:
     return bpy.data.texts[ERROR_LOG_NAME]
 
 
+def _get_provider_config(prefs) -> tuple[str | None, str, str]:
+    """Return (api_key, model, base_url) for the selected provider.
+
+    base_url is used by Anthropic-compatible providers and Ollama; empty for OpenAI.
+    """
+    provider = prefs.provider
+    if provider == "CLAUDE":
+        return prefs.claude_api_key, prefs.claude_model, llm_client.ANTHROPIC_BASE_URL
+    if provider == "OPENAI":
+        return prefs.openai_api_key, prefs.openai_model, ""
+    if provider == "KIMI":
+        return prefs.kimi_api_key, prefs.kimi_model, prefs.kimi_base_url
+    if provider == "DEEPSEEK":
+        return prefs.deepseek_api_key, prefs.deepseek_model, prefs.deepseek_base_url
+    return None, prefs.ollama_model, prefs.ollama_url
+
+
+def _get_extra_headers(prefs) -> dict[str, str] | None:
+    """Extra HTTP headers for Anthropic-compatible third-party providers."""
+    if prefs.provider not in ("KIMI", "DEEPSEEK"):
+        return None
+    api_key = prefs.kimi_api_key if prefs.provider == "KIMI" else prefs.deepseek_api_key
+    headers = {"Authorization": f"Bearer {api_key}"}
+    if prefs.provider == "DEEPSEEK" and prefs.deepseek_long_context and prefs.deepseek_model == "deepseek-v4-pro":
+        headers["anthropic-beta"] = "context-1m-2025-08-07"
+    return headers
+
+
 def _log_error(prompt: str, code: str, error: str) -> None:
     """Log a structured error entry for later analysis."""
     log = _get_error_log()
     prefs = get_addon_preferences()
     blender_ver = ".".join(str(v) for v in bpy.app.version)
     provider = prefs.provider
-    if provider == "CLAUDE":
-        model = prefs.claude_model
-    elif provider == "OPENAI":
-        model = prefs.openai_model
-    else:
-        model = prefs.ollama_model
+    _, model, _ = _get_provider_config(prefs)
 
     entry = (
         f"\n{'#' * 60}\n"
@@ -99,6 +122,12 @@ class AIASSIST_OT_send_message(Operator):
         elif prefs.provider == "OPENAI" and not prefs.openai_api_key:
             self.report({"ERROR"}, "OpenAI API key not set. Check addon preferences.")
             return {"CANCELLED"}
+        elif prefs.provider == "KIMI" and not prefs.kimi_api_key:
+            self.report({"ERROR"}, "Kimi API key not set. Check addon preferences.")
+            return {"CANCELLED"}
+        elif prefs.provider == "DEEPSEEK" and not prefs.deepseek_api_key:
+            self.report({"ERROR"}, "DeepSeek API key not set. Check addon preferences.")
+            return {"CANCELLED"}
 
         # Clear UI messages from previous exchange, keep full history in log
         state.messages.clear()
@@ -127,22 +156,13 @@ class AIASSIST_OT_send_message(Operator):
 
         # Gather provider settings
         provider = prefs.provider
-        if provider == "CLAUDE":
-            api_key = prefs.claude_api_key
-            model = prefs.claude_model
-        elif provider == "OPENAI":
-            api_key = prefs.openai_api_key
-            model = prefs.openai_model
-        else:
-            api_key = None
-            model = prefs.ollama_model
-
-        ollama_url = prefs.ollama_url
+        api_key, model, base_url = _get_provider_config(prefs)
+        extra_headers = _get_extra_headers(prefs)
 
         # Spawn background thread for HTTP call
         thread = threading.Thread(
             target=_background_llm_call,
-            args=(provider, api_key, model, ollama_url, system_prompt, messages),
+            args=(provider, api_key, model, base_url, system_prompt, messages, extra_headers),
             daemon=True,
         )
         thread.start()
@@ -278,15 +298,23 @@ def _build_history_from_log() -> list[dict[str, str]]:
     return history
 
 
-def _background_llm_call(provider: str, api_key: str | None, model: str, ollama_url: str, system_prompt: str, messages: list[dict[str, str]]) -> None:
+def _background_llm_call(
+    provider: str,
+    api_key: str | None,
+    model: str,
+    base_url: str,
+    system_prompt: str,
+    messages: list[dict[str, str]],
+    extra_headers: dict[str, str] | None = None,
+) -> None:
     """Run LLM API call in a background thread. Puts result in the global queue."""
     try:
-        if provider == "CLAUDE":
-            response = llm_client.call_claude(api_key, model, system_prompt, messages)
+        if provider in ("CLAUDE", "KIMI", "DEEPSEEK"):
+            response = llm_client.call_anthropic(base_url, api_key, model, system_prompt, messages, extra_headers)
         elif provider == "OPENAI":
             response = llm_client.call_openai(api_key, model, system_prompt, messages)
         else:
-            response = llm_client.call_ollama(ollama_url, model, system_prompt, messages)
+            response = llm_client.call_ollama(base_url, model, system_prompt, messages)
         _result_queue.put(("success", response))
     except Exception as e:
         _result_queue.put(("error", str(e)))
@@ -404,19 +432,12 @@ def _trigger_retry(context: bpy.types.Context | None, failed_code: str, error: s
     _, messages = llm_client.build_messages(system_prompt, history)
 
     provider = prefs.provider
-    if provider == "CLAUDE":
-        api_key = prefs.claude_api_key
-        model = prefs.claude_model
-    elif provider == "OPENAI":
-        api_key = prefs.openai_api_key
-        model = prefs.openai_model
-    else:
-        api_key = None
-        model = prefs.ollama_model
+    api_key, model, base_url = _get_provider_config(prefs)
+    extra_headers = _get_extra_headers(prefs)
 
     thread = threading.Thread(
         target=_background_llm_call,
-        args=(provider, api_key, model, prefs.ollama_url, system_prompt, messages),
+        args=(provider, api_key, model, base_url, system_prompt, messages, extra_headers),
         daemon=True,
     )
     thread.start()
