@@ -9,7 +9,7 @@ Blender addons for AI-assisted 3D workflows.
 A chat panel inside Blender's 3D viewport that lets you control Blender through natural language. Ask it to create objects, set up materials, configure lighting, animate, render -- it generates and executes Python code automatically.
 
 **Features:**
-- Chat interface in the 3D viewport sidebar (N panel > AI Assistant tab)
+- Chat interface in the 3D viewport sidebar (N panel > AI Assistant tab) and in the Properties editor's Tool tab (right column)
 - Supports **Claude**, **OpenAI**, **Kimi** (Moonshot), **DeepSeek**, and **Ollama** (local models) as LLM providers
   - Kimi: `k3` (api.kimi.ai/coding), `kimi-for-coding` / `kimi-coding` (api.kimi.com/coding) -- Anthropic-compatible endpoint
   - DeepSeek: `deepseek-v4-pro` (optional 1M-token context beta) and `deepseek-v4-flash` via api.deepseek.com/anthropic

@@ -89,10 +89,10 @@ def _log_error(prompt: str, code: str, error: str) -> None:
 
 
 def _redraw_views() -> None:
-    """Force redraw of 3D viewports."""
+    """Force redraw of 3D viewports and Properties editors."""
     for window in bpy.context.window_manager.windows:
         for area in window.screen.areas:
-            if area.type == "VIEW_3D":
+            if area.type in ("VIEW_3D", "PROPERTIES"):
                 area.tag_redraw()
 
 
