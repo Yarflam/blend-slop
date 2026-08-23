@@ -51,7 +51,11 @@ def _get_provider_config(prefs) -> tuple[str | None, str, str]:
     if provider == "OPENAI":
         return prefs.openai_api_key, prefs.openai_model, ""
     if provider == "KIMI":
-        return prefs.kimi_api_key, prefs.kimi_model, prefs.kimi_base_url
+        base_url = prefs.kimi_base_url
+        # kimi-for-coding/kimi-coding live on api.kimi.com, not api.kimi.ai
+        if prefs.kimi_model != "k3" and base_url.rstrip("/") == "https://api.kimi.ai/coding":
+            base_url = "https://api.kimi.com/coding"
+        return prefs.kimi_api_key, prefs.kimi_model, base_url
     if provider == "DEEPSEEK":
         return prefs.deepseek_api_key, prefs.deepseek_model, prefs.deepseek_base_url
     return None, prefs.ollama_model, prefs.ollama_url
