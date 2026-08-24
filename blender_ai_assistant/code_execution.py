@@ -87,6 +87,23 @@ def extract_code_blocks(text: str) -> list[str]:
     return blocks
 
 
+def extract_prose(text: str) -> str:
+    """Return the text with fenced ``` code blocks removed (the plan/explanation)."""
+    lines = text.split("\n")
+    out_lines = []
+    in_block = False
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_block = not in_block
+            continue
+        if not in_block:
+            out_lines.append(line)
+
+    return "\n".join(out_lines).strip()
+
+
 def _looks_like_code(text: str) -> bool:
     code_indicators = ["import ", "bpy.", "def ", "for ", "if ", "=", "()", "bmesh."]
     lines = text.strip().split("\n")

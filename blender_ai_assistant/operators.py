@@ -17,6 +17,11 @@ ERROR_LOG_NAME = "AI Assistant Errors"
 # Global queue for thread-safe communication between HTTP thread and main thread
 _result_queue = queue.Queue()
 
+# Request token: incremented on every new send and on stop, so stale thread
+# results can be discarded. `_api_messages` is the in-flight API conversation.
+_request_id = 0
+_api_messages: list[dict[str, str]] = []
+
 
 def _get_log_text() -> bpy.types.Text:
     """Get or create the Text block used for full conversation log."""
@@ -100,6 +105,48 @@ def _redraw_views() -> None:
                 area.tag_redraw()
 
 
+def _add_message(state, role: str, content: str, is_error: bool = False, code: str = "") -> None:
+    """Append a message to the persistent UI transcript."""
+    msg = state.messages.add()
+    msg.role = role
+    msg.content = content
+    msg.is_error = is_error
+    msg.code = code
+
+
+def _assistant_content(prose: str, code: str) -> str:
+    """Format an assistant turn (plan/prose + code) for the API conversation."""
+    parts = []
+    if prose:
+        parts.append(prose)
+    if code:
+        parts.append(f"```python\n{code}\n```")
+    return "\n\n".join(parts)
+
+
+def _last_user_prompt(state) -> str:
+    """Return the most recent user message, for error logging."""
+    for i in range(len(state.messages) - 1, -1, -1):
+        if state.messages[i].role == "user":
+            return state.messages[i].content
+    return ""
+
+
+def _build_history(state) -> list[dict[str, str]]:
+    """Build LLM conversation history from the persistent UI transcript."""
+    history = []
+    for m in state.messages:
+        if m.role == "user":
+            history.append({"role": "user", "content": m.content})
+        elif m.role == "assistant":
+            history.append({"role": "assistant", "content": _assistant_content(m.content, m.code)})
+
+    # Keep the most recent exchanges to bound context size
+    if len(history) > 40:
+        history = history[-40:]
+    return history
+
+
 class AIASSIST_OT_send_message(Operator):
     bl_idname = "ai_assistant.send_message"
     bl_label = "Send Message"
@@ -133,46 +180,52 @@ class AIASSIST_OT_send_message(Operator):
             self.report({"ERROR"}, "DeepSeek API key not set. Check addon preferences.")
             return {"CANCELLED"}
 
-        # Clear UI messages from previous exchange, keep full history in log
-        state.messages.clear()
+        # Reset loop state (do NOT clear the transcript -- it persists across turns)
+        global _request_id, _api_messages
+        _request_id += 1
+        state.step_count = 0
+        state.retry_count = 0
+        state.is_stopping = False
 
-        # Add user message to UI
-        msg = state.messages.add()
-        msg.role = "user"
-        msg.content = prompt_text
-
-        # Log it
+        # Add user message to the persistent transcript
+        _add_message(state, "user", prompt_text)
         _log_write("user", prompt_text)
 
         # Clear input
         state.prompt = ""
-        state.is_busy = True
 
-        # Build conversation history from the full log text block
-        history = _build_history_from_log()
+        # Build the API conversation from the transcript (includes the new user message)
+        _api_messages = _build_history(state)
 
-        # Always include scene context
-        scene_ctx = scene_context.get_scene_summary()
+        # Spawn the first call (planning phase)
+        _spawn_llm_call(state, "planning")
 
-        blender_version = ".".join(str(v) for v in bpy.app.version)
-        system_prompt = llm_client.build_system_prompt(blender_version, scene_ctx, rich=state.rich_prompt)
-        _, messages = llm_client.build_messages(system_prompt, history)
-
-        # Gather provider settings
-        provider = prefs.provider
-        api_key, model, base_url = _get_provider_config(prefs)
-        extra_headers = _get_extra_headers(prefs)
-
-        # Spawn background thread for HTTP call
-        thread = threading.Thread(
-            target=_background_llm_call,
-            args=(provider, api_key, model, base_url, system_prompt, messages, extra_headers),
-            daemon=True,
-        )
-        thread.start()
-
-        # Register timer to poll for results on main thread
+        # Register a single timer that drives the whole plan -> step -> continue loop
         bpy.app.timers.register(_check_result_queue, first_interval=0.1)
+
+        _redraw_views()
+        return {"FINISHED"}
+
+
+class AIASSIST_OT_stop(Operator):
+    bl_idname = "ai_assistant.stop"
+    bl_label = "Stop"
+    bl_description = "Stop the current request"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        global _request_id
+        state = context.scene.ai_assistant
+        state.is_stopping = True
+        state.phase = "idle"
+        state.is_busy = False
+        _request_id += 1  # invalidate any in-flight result
+
+        # Drain stale results so the next request does not consume them
+        while not _result_queue.empty():
+            try:
+                _result_queue.get_nowait()
+            except queue.Empty:
+                break
 
         _redraw_views()
         return {"FINISHED"}
@@ -184,10 +237,23 @@ class AIASSIST_OT_clear_chat(Operator):
     bl_description = "Clear chat display (log is preserved in Text Editor)"
 
     def execute(self, context: bpy.types.Context) -> set[str]:
+        global _request_id
         state = context.scene.ai_assistant
         state.messages.clear()
         state.active_message_index = 0
         state.is_busy = False
+        state.phase = "idle"
+        state.step_count = 0
+        state.retry_count = 0
+        state.is_stopping = False
+        _request_id += 1
+
+        while not _result_queue.empty():
+            try:
+                _result_queue.get_nowait()
+            except queue.Empty:
+                break
+
         return {"FINISHED"}
 
 
@@ -204,6 +270,10 @@ class AIASSIST_OT_clear_log(Operator):
         state = context.scene.ai_assistant
         state.messages.clear()
         state.is_busy = False
+        state.phase = "idle"
+        state.step_count = 0
+        state.retry_count = 0
+        state.is_stopping = False
         self.report({"INFO"}, "Log cleared")
         return {"FINISHED"}
 
@@ -266,43 +336,8 @@ class AIASSIST_OT_clear_errors(Operator):
         return {"FINISHED"}
 
 
-def _build_history_from_log() -> list[dict[str, str]]:
-    """Parse the log Text block back into a conversation history list."""
-    if LOG_TEXT_NAME not in bpy.data.texts:
-        return []
-
-    log = bpy.data.texts[LOG_TEXT_NAME]
-    text = log.as_string()
-    if not text.strip():
-        return []
-
-    history = []
-    separator = "=" * 60
-    sections = text.split(separator)
-
-    current_role = None
-    for section in sections:
-        section = section.strip()
-        if not section:
-            continue
-        if section == "[USER]":
-            current_role = "user"
-        elif section == "[AI]":
-            current_role = "assistant"
-        elif section == "[SYSTEM]":
-            current_role = None  # Skip system messages in history sent to LLM
-        elif current_role in ("user", "assistant"):
-            history.append({"role": current_role, "content": section})
-            current_role = None
-
-    # Keep last 20 exchanges to avoid huge context
-    if len(history) > 40:
-        history = history[-40:]
-
-    return history
-
-
 def _background_llm_call(
+    request_id: int,
     provider: str,
     api_key: str | None,
     model: str,
@@ -311,7 +346,7 @@ def _background_llm_call(
     messages: list[dict[str, str]],
     extra_headers: dict[str, str] | None = None,
 ) -> None:
-    """Run LLM API call in a background thread. Puts result in the global queue."""
+    """Run LLM API call in a background thread. Puts (request_id, status, data) in the queue."""
     try:
         if provider in ("CLAUDE", "KIMI", "DEEPSEEK"):
             response = llm_client.call_anthropic(base_url, api_key, model, system_prompt, messages, extra_headers)
@@ -319,146 +354,177 @@ def _background_llm_call(
             response = llm_client.call_openai(api_key, model, system_prompt, messages)
         else:
             response = llm_client.call_ollama(base_url, model, system_prompt, messages)
-        _result_queue.put(("success", response))
+        _result_queue.put((request_id, "success", response))
     except Exception as e:
-        _result_queue.put(("error", str(e)))
+        _result_queue.put((request_id, "error", str(e)))
 
 
-def _check_result_queue() -> float | None:
-    """Timer callback: polls the result queue on the main thread."""
-    if _result_queue.empty():
-        return 0.1  # Check again in 100ms
-
-    status, data = _result_queue.get()
-
-    scene = bpy.context.scene
-    if not hasattr(scene, "ai_assistant"):
-        return None
-
-    state = scene.ai_assistant
-
-    if status == "success":
-        # Add assistant response to UI
-        msg = state.messages.add()
-        msg.role = "assistant"
-        msg.content = data
-        _log_write("assistant", data)
-
-        if not data.strip():
-            err_msg = state.messages.add()
-            err_msg.role = "system"
-            err_msg.content = "The model returned an empty response. Try rephrasing or switching model."
-            err_msg.is_error = True
-            state.is_busy = False
-            _redraw_views()
-            return None
-
-        # Extract code blocks
-        code_blocks = code_execution.extract_code_blocks(data)
-        if code_blocks:
-            msg.code = "\n\n".join(code_blocks)
-
-            # Always auto-execute
-            success, stdout, error = code_execution.execute_code(msg.code)
-            if success:
-                content = "Executed successfully." + (f"\nOutput:\n{stdout}" if stdout.strip() else "")
-                result_msg = state.messages.add()
-                result_msg.role = "system"
-                result_msg.content = content
-                _log_write("system", content)
-                state.is_busy = False
-            else:
-                content = f"Execution error:\n{error}"
-                result_msg = state.messages.add()
-                result_msg.role = "system"
-                result_msg.content = content
-                result_msg.is_error = True
-                _log_write("system", content)
-
-                # Collect error for analysis
-                user_prompt = ""
-                for m in state.messages:
-                    if m.role == "user":
-                        user_prompt = m.content
-                _log_error(user_prompt, msg.code, error)
-
-                # Auto-retry on error
-                prefs = get_addon_preferences()
-                if prefs.max_retries > 0:
-                    _trigger_retry(None, msg.code, error)
-                else:
-                    state.is_busy = False
-        else:
-            # No code in the response -- show the model's text so the user gets feedback
-            note = state.messages.add()
-            note.role = "system"
-            note.content = "AI replied without code:\n" + data.strip()
-            state.is_busy = False
-    else:
-        msg = state.messages.add()
-        msg.role = "system"
-        msg.content = f"API Error: {data}"
-        msg.is_error = True
-        _log_write("system", f"API Error: {data}")
-        state.is_busy = False
-
-    _redraw_views()
-    return None  # Unregister timer
-
-
-_retry_count = 0
-
-
-def _trigger_retry(context: bpy.types.Context | None, failed_code: str, error: str) -> None:
-    """Send the error back to the LLM for automatic correction."""
-    global _retry_count
-    prefs = get_addon_preferences(context)
-
-    if _retry_count >= prefs.max_retries:
-        _retry_count = 0
-        state = bpy.context.scene.ai_assistant
-        state.is_busy = False
-
-        # Add final failure message
-        fail_msg = state.messages.add()
-        fail_msg.role = "system"
-        fail_msg.content = f"Failed after {prefs.max_retries} retries. Check the log for details."
-        fail_msg.is_error = True
-        _log_write("system", f"Failed after {prefs.max_retries} retries.")
-        return
-
-    _retry_count += 1
-
-    state = bpy.context.scene.ai_assistant
-    state.is_busy = True
-
-    retry_prompt = code_execution.format_error_for_retry(failed_code, error)
-    _log_write("user", f"[Auto-retry {_retry_count}] {retry_prompt}")
-
-    # Add retry indicator in UI
-    retry_ui = state.messages.add()
-    retry_ui.role = "system"
-    retry_ui.content = f"Retrying... (attempt {_retry_count}/{prefs.max_retries})"
-
-    # Build conversation from log
-    history = _build_history_from_log()
-
-    blender_version = ".".join(str(v) for v in bpy.app.version)
-    scene_ctx = scene_context.get_scene_summary()
-    system_prompt = llm_client.build_system_prompt(blender_version, scene_ctx, rich=state.rich_prompt)
-    _, messages = llm_client.build_messages(system_prompt, history)
-
+def _spawn_llm_call(state, phase: str) -> None:
+    """Spawn the next LLM call in the loop (does not register a timer)."""
+    global _request_id
+    prefs = get_addon_preferences()
     provider = prefs.provider
     api_key, model, base_url = _get_provider_config(prefs)
     extra_headers = _get_extra_headers(prefs)
 
+    # Re-summarize the scene: it changed since the last step
+    scene_ctx = scene_context.get_scene_summary()
+    blender_version = ".".join(str(v) for v in bpy.app.version)
+    system_prompt = llm_client.build_system_prompt(blender_version, scene_ctx, rich=state.rich_prompt)
+
+    state.phase = phase
+    state.is_busy = True
+
     thread = threading.Thread(
         target=_background_llm_call,
-        args=(provider, api_key, model, base_url, system_prompt, messages, extra_headers),
+        args=(_request_id, provider, api_key, model, base_url, system_prompt, list(_api_messages), extra_headers),
         daemon=True,
     )
     thread.start()
-    bpy.app.timers.register(_check_result_queue, first_interval=0.1)
+    _redraw_views()
+
+
+def _finish_loop(state) -> None:
+    """Reset loop state and unlock the UI."""
+    global _api_messages
+    state.is_busy = False
+    state.phase = "idle"
+    state.is_stopping = False
+    state.step_count = 0
+    state.retry_count = 0
+    _api_messages = []
+
+
+def _is_done(text: str) -> bool:
+    """Detect a standalone DONE signal (the reply has no code block)."""
+    cleaned = "".join(ch for ch in text.strip().upper() if ch.isalnum() or ch == " ")
+    words = cleaned.split()
+    if not words:
+        return False
+    return words[0] in ("DONE", "COMPLETE", "FINISHED") and len(words) <= 3
+
+
+def _handle_planning_response(state, text: str) -> None:
+    """First turn: extract the plan + first step, execute it, then continue."""
+    prose = code_execution.extract_prose(text)
+    blocks = code_execution.extract_code_blocks(text)
+
+    if not blocks:
+        _add_message(state, "assistant", prose)
+        _log_write("assistant", prose)
+        _add_message(state, "system", "No code block received. Reply with a ```python block to run something.", is_error=True)
+        _finish_loop(state)
+        return
+
+    code = blocks[0]
+    _add_message(state, "assistant", prose, code=code)
+    _log_write("assistant", _assistant_content(prose, code))
+    _api_messages.append({"role": "assistant", "content": _assistant_content(prose, code)})
+
+    _execute_and_continue(state, code)
+
+
+def _handle_stepping_response(state, text: str) -> None:
+    """Later turns: execute the next step, or finish on DONE."""
+    prose = code_execution.extract_prose(text)
+    blocks = code_execution.extract_code_blocks(text)
+
+    if not blocks:
+        if _is_done(text):
+            _add_message(state, "system", "Task complete.")
+            _log_write("system", "Task complete.")
+        else:
+            _add_message(state, "assistant", prose)
+            _log_write("assistant", prose)
+            _add_message(state, "system", "Stopped: no code block received.", is_error=True)
+        _finish_loop(state)
+        return
+
+    code = blocks[0]
+    _add_message(state, "assistant", prose, code=code)
+    _log_write("assistant", _assistant_content(prose, code))
+    _api_messages.append({"role": "assistant", "content": _assistant_content(prose, code)})
+
+    _execute_and_continue(state, code)
+
+
+def _execute_and_continue(state, code: str) -> None:
+    """Execute one step's code, record the result, then continue or finish."""
+    prefs = get_addon_preferences()
+    success, stdout, error = code_execution.execute_code(code)
+
+    if success:
+        content = "Executed successfully." + (f"\nOutput:\n{stdout}" if stdout.strip() else "")
+        _add_message(state, "system", content)
+        _log_write("system", content)
+        state.retry_count = 0
+        continuation = (
+            "Step executed successfully.\nOutput:\n" + stdout +
+            "\n\nContinue with the next step. Reply with ONE ```python block "
+            "for the next step, or reply exactly DONE if the task is complete."
+        )
+    else:
+        content = f"Execution error:\n{error}"
+        _add_message(state, "system", content, is_error=True)
+        _log_write("system", content)
+        _log_error(_last_user_prompt(state), code, error)
+
+        if state.retry_count < prefs.max_retries:
+            state.retry_count += 1
+            continuation = code_execution.format_error_for_retry(code, error)
+        else:
+            _add_message(state, "system", f"Step failed after {prefs.max_retries} retries.", is_error=True)
+            _finish_loop(state)
+            return
+
+    state.step_count += 1
+    if state.step_count > prefs.max_steps:
+        _add_message(state, "system", f"Step limit reached ({prefs.max_steps}).", is_error=True)
+        _finish_loop(state)
+        return
+
+    _api_messages.append({"role": "user", "content": continuation})
+    _spawn_llm_call(state, "stepping")
+
+
+def _check_result_queue() -> float | None:
+    """Timer callback: drives the plan -> step -> continue loop on the main thread."""
+    scene = bpy.context.scene
+    if not hasattr(scene, "ai_assistant"):
+        return None
+    state = scene.ai_assistant
+
+    if _result_queue.empty():
+        if state.is_stopping or state.phase == "idle":
+            return None
+        return 0.1
+
+    request_id, status, data = _result_queue.get()
+
+    # Discard results from a cancelled or superseded request
+    if request_id != _request_id:
+        return 0.1 if state.is_busy else None
+
+    if state.is_stopping:
+        _finish_loop(state)
+        _redraw_views()
+        return None
+
+    if status == "error":
+        _add_message(state, "system", f"API Error: {data}", is_error=True)
+        _log_write("system", f"API Error: {data}")
+        _finish_loop(state)
+        _redraw_views()
+        return None
+
+    text = data
+    if state.phase == "planning":
+        _handle_planning_response(state, text)
+    else:
+        _handle_stepping_response(state, text)
+
+    _redraw_views()
+    return None if state.phase == "idle" else 0.1
 
 
 class AIASSIST_OT_clear_polyhaven_cache(Operator):
@@ -486,6 +552,7 @@ class AIASSIST_OT_clear_sketchfab_cache(Operator):
 
 classes = (
     AIASSIST_OT_send_message,
+    AIASSIST_OT_stop,
     AIASSIST_OT_clear_chat,
     AIASSIST_OT_clear_log,
     AIASSIST_OT_open_log,

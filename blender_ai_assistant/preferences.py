@@ -129,7 +129,15 @@ class AIAssistantPreferences(AddonPreferences):
         default=3,
         min=0,
         max=10,
-        description="Number of automatic retries on code execution error",
+        description="Number of automatic retries per step on code execution error",
+    )
+
+    max_steps: IntProperty(
+        name="Max Steps",
+        default=15,
+        min=1,
+        max=50,
+        description="Maximum number of execution steps per request (prevents runaway loops)",
     )
 
     def draw(self, context: bpy.types.Context) -> None:
@@ -161,6 +169,7 @@ class AIAssistantPreferences(AddonPreferences):
         layout.prop(self, "sketchfab_api_key")
         layout.separator()
         layout.prop(self, "max_retries")
+        layout.prop(self, "max_steps")
 
 
 classes = (AIAssistantPreferences,)

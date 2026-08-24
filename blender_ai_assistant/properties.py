@@ -29,6 +29,15 @@ class AIAssistantState(PropertyGroup):
         default=True,
         description="Full API reference in system prompt (more accurate, ~2.5K extra tokens). Disable for cheaper/faster calls",
     )
+    # Step-by-step loop state (drives the plan -> execute -> continue cycle)
+    phase: StringProperty(
+        name="Phase",
+        default="idle",
+        description="Current step-loop phase: idle, planning, or stepping",
+    )
+    step_count: IntProperty(name="Step Count", default=0)
+    retry_count: IntProperty(name="Retry Count", default=0)
+    is_stopping: BoolProperty(name="Is Stopping", default=False)
 
 
 classes = (

@@ -95,7 +95,7 @@ def _draw_chat_ui(layout: bpy.types.UILayout, context: bpy.types.Context) -> Non
 
     layout.separator()
 
-    # Chat history -- show only prompt + result, no code
+    # Chat history -- full transcript (user, assistant plan/code, and results)
     if state.messages:
         row = layout.row()
         row.label(text="")
@@ -107,6 +107,8 @@ def _draw_chat_ui(layout: bpy.types.UILayout, context: bpy.types.Context) -> Non
         for msg in state.messages:
             if msg.role == "user":
                 _draw_user_message(col, msg, width_chars)
+            elif msg.role == "assistant":
+                _draw_assistant_message(col, msg, width_chars)
             elif msg.role == "system":
                 _draw_system_message(col, msg, width_chars)
     else:
@@ -119,6 +121,7 @@ def _draw_chat_ui(layout: bpy.types.UILayout, context: bpy.types.Context) -> Non
         row = layout.row()
         row.alert = True
         row.label(text="Thinking...", icon="SORTTIME")
+        row.operator("ai_assistant.stop", text="Stop", icon="X")
         layout.separator()
 
     # Input area
@@ -181,6 +184,28 @@ def _draw_system_message(col: bpy.types.UILayout, msg: object, width_chars: int)
     total_lines = len(_wrap_text(msg.content, width_chars - 4))
     if total_lines > 15:
         box.label(text=f"... ({total_lines - 15} more lines)")
+
+
+def _draw_assistant_message(col: bpy.types.UILayout, msg: object, width_chars: int) -> None:
+    """Draw the assistant's plan/prose and a compact preview of the generated code."""
+    box = col.box()
+    row = box.row()
+    row.label(text="", icon="INFO")
+    row.label(text="Assistant")
+
+    if msg.content:
+        for line in _wrap_text(msg.content, width_chars - 4):
+            box.label(text=line)
+
+    if msg.code:
+        code_lines = msg.code.strip().split("\n")
+        box.label(text=f"Code ({len(code_lines)} lines):")
+        for line in code_lines[:8]:
+            if len(line) > width_chars - 4:
+                line = line[: width_chars - 4] + "…"
+            box.label(text=line)
+        if len(code_lines) > 8:
+            box.label(text=f"... ({len(code_lines) - 8} more lines)")
 
 
 classes = (AIASSIST_PT_main_panel, AIASSIST_PT_properties_panel)

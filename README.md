@@ -16,6 +16,8 @@ A chat panel inside Blender's 3D viewport that lets you control Blender through 
 - Deep Blender 5.x API knowledge in the system prompt -- knows about renamed nodes, removed APIs, and common pitfalls
 - Understands natural language ("make it glossy", "add thickness", "three-point lighting") and maps to correct Blender operations
 - Sends current scene state to the LLM (objects, materials, modifiers, node trees, lights, cameras, enabled addons)
+- **Step-by-step execution** -- plans first, then runs one small code block at a time, feeding each step's result back so the model can refine the approach (avoids huge scripts that slow Blender and hit token limits)
+- **Persistent chat history** -- the plan, generated code, and per-step results stay visible in the panel; a Stop button and a configurable max-steps limit guard against runaway loops
 - Auto-executes generated code with automatic error retry (sends traceback back to LLM for correction)
 - **Sketchfab integration** -- search and download from 1M+ free CC-licensed 3D models (characters, vehicles, animals, props)
 - **Polyhaven integration** -- download CC0 3D models (furniture, plants, rocks, nature), PBR textures (wood, brick, stone, metal, fabric, etc.), and HDRIs (environment lighting) with no auth needed
