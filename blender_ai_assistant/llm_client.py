@@ -572,7 +572,7 @@ def call_openai(api_key: str, model: str, system_prompt: str, messages: list[dic
     body = {
         "model": model,
         "messages": all_messages,
-        "max_tokens": 8192,
+        "max_completion_tokens": 8192,
     }
     return _http_post(url, headers, body, _parse_openai_response)
 
