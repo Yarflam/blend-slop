@@ -50,6 +50,7 @@ class AIAssistantPreferences(AddonPreferences):
     openai_model: EnumProperty(
         name="OpenAI Model",
         items=[
+            ("gpt-6-astra", "GPT-6 Astra", "Latest GPT-6 model"),
             ("gpt-4o", "GPT-4o", "Most capable"),
             ("gpt-4o-mini", "GPT-4o Mini", "Fast and cheap"),
             ("gpt-4.1", "GPT-4.1", "Latest GPT-4 variant"),
